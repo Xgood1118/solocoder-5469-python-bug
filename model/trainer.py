@@ -1,5 +1,6 @@
 import os
 import datetime
+import logging
 
 import joblib
 import numpy as np
@@ -156,7 +157,7 @@ class SVMTrainer:
         return joblib.load(path)
 
 
-def train_all_models(train_data, preprocess_pipeline, version=None):
+def train_all_models(train_data, preprocess_pipeline, version=None, include_bert=True):
     manager = ModelManager()
     if version is None:
         version = manager.increment_version()
@@ -201,5 +202,14 @@ def train_all_models(train_data, preprocess_pipeline, version=None):
                 "trained_at": datetime.datetime.now().isoformat(),
                 "n_samples": len(labels),
             }
+
+    if include_bert:
+        try:
+            from model.bert_trainer import train_bert_models
+            bert_results = train_bert_models(train_data, version_str)
+            results.update(bert_results)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning("BERT training skipped or failed: %s", e)
 
     return results

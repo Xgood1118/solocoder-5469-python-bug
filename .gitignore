@@ -101,3 +101,6 @@ screenshot_R*
 # ── SoloCoder runtime artifacts ──
 todo.db
 trae-*.log
+
+# ── BERT model cache (downloaded weights) ──
+models/bert_cache/

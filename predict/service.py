@@ -10,7 +10,7 @@ from preprocess.pipeline import PreprocessPipeline
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAMES = ["nb", "svm"]
+MODEL_NAMES = ["nb", "svm", "bert"]
 
 
 class PredictionService:
@@ -55,10 +55,19 @@ class PredictionService:
                     if os.path.exists(fallback):
                         filepath = fallback
                     else:
-                        logger.warning("Model file not found: %s", filename)
+                        if model_type != "bert":
+                            logger.warning("Model file not found: %s", filename)
                         continue
-                self._models[(task, model_type)] = joblib.load(filepath)
+                self._models[(task, model_type)] = self._load_model(filepath, model_type)
                 self._mtimes[(task, model_type)] = os.path.getmtime(filepath)
+
+    @staticmethod
+    def _load_model(filepath, model_type):
+        if model_type == "bert":
+            from model.bert_trainer import BERTTrainer
+            return BERTTrainer.load(filepath)
+        else:
+            return joblib.load(filepath)
 
     def _check_hot_reload(self):
         version_path = os.path.join(MODELS_DIR, "version.txt")
@@ -84,7 +93,7 @@ class PredictionService:
             current_mtime = os.path.getmtime(filepath)
             if current_mtime != old_mtime:
                 logger.info("Hot-reloading model: %s", filename)
-                self._models[key] = joblib.load(filepath)
+                self._models[key] = self._load_model(filepath, model_type)
                 self._mtimes[key] = current_mtime
 
     @staticmethod
@@ -100,21 +109,25 @@ class PredictionService:
         sev_key = ("severity", model_type)
 
         if cat_key not in self._models or sev_key not in self._models:
-            raise ValueError(f"Model type '{model_type}' not available")
-
-        tokens, auxiliary_features = self._pipeline.preprocess_single(description)
-        tfidf_input = [" ".join(tokens)]
-        tfidf_vec = self._pipeline.transform(tfidf_input)
-        aux_vec = self._pipeline.get_auxiliary_feature_vector(auxiliary_features).reshape(1, -1)
-
-        from scipy.sparse import hstack
-        feature_vec = hstack([tfidf_vec, aux_vec])
+            raise ValueError("Model type '%s' not available" % model_type)
 
         cat_trainer = self._models[cat_key]
         sev_trainer = self._models[sev_key]
 
-        cat_pred_labels, cat_conf_scores = cat_trainer.predict(feature_vec)
-        sev_pred_labels, sev_conf_scores = sev_trainer.predict(feature_vec)
+        if model_type == "bert":
+            cat_pred_labels, cat_conf_scores = cat_trainer.predict(description)
+            sev_pred_labels, sev_conf_scores = sev_trainer.predict(description)
+        else:
+            tokens, auxiliary_features = self._pipeline.preprocess_single(description)
+            tfidf_input = [" ".join(tokens)]
+            tfidf_vec = self._pipeline.transform(tfidf_input)
+            aux_vec = self._pipeline.get_auxiliary_feature_vector(auxiliary_features).reshape(1, -1)
+
+            from scipy.sparse import hstack
+            feature_vec = hstack([tfidf_vec, aux_vec])
+
+            cat_pred_labels, cat_conf_scores = cat_trainer.predict(feature_vec)
+            sev_pred_labels, sev_conf_scores = sev_trainer.predict(feature_vec)
 
         cat_label = str(cat_pred_labels[0])
         sev_label = str(sev_pred_labels[0])
@@ -139,8 +152,9 @@ class PredictionService:
             "severity_confidence": round(sev_conf, 4),
             "confidence": round(confidence, 4),
             "needs_review": needs_review,
-            "model_version": f"v{self._version}",
+            "model_version": "v%s" % self._version,
             "predict_time_ms": round(predict_time_ms, 2),
+            "model_type": model_type,
         }
 
         if needs_review:
